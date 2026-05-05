@@ -1,7 +1,7 @@
 [project]
 name = "image-chooser-classic"
 description = "A modern re-implementation of the classic [a/cg-image-picker](https://github.com/chrisgoringe/cg-image-picker) ComfyUI nodes. Keep the workflow-pausing image selection experience while shedding the legacy compatibility shims."
-version = "1.1.2"
+version = "1.1.3"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
