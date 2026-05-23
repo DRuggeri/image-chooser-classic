@@ -38,6 +38,7 @@ class BaseChooser(PreviewImage):
     FUNCTION = "func"
 
     _last_ic: Dict[str, float] = {}
+    _last_image_fingerprint: Dict[str, object] = {}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -47,6 +48,7 @@ class BaseChooser(PreviewImage):
                     [
                         "Always pause",
                         "Repeat last selection",
+                        "Repeat last cached selection",
                         "Only pause if batch",
                         "Progress first pick",
                         "Pass through",
@@ -70,7 +72,7 @@ class BaseChooser(PreviewImage):
     def IS_CHANGED(cls, id, **kwargs):
         mode = kwargs.get("mode", ["Always pause"])
         node_id = str(id[0])
-        if mode[0] != "Repeat last selection" or node_id not in cls._last_ic:
+        if mode[0] not in ("Repeat last selection", "Repeat last cached selection") or node_id not in cls._last_ic:
             cls._last_ic[node_id] = random.random()
         return cls._last_ic[node_id]
 
@@ -138,11 +140,18 @@ class BaseChooser(PreviewImage):
         for key in list(kwargs.keys()):
             kwargs[key] = kwargs[key][0]
 
+        image_fingerprint = None
+        if mode == "Repeat last cached selection":
+            image_fingerprint = tuple((tuple(img.shape), img.sum().item()) for img in flat_images)
+
         selection: Optional[List[int]] = None
         last_selection = MessageBroker.get_last_selection(unique_id)
 
         if mode == "Repeat last selection" and last_selection:
             selection = list(last_selection)
+        elif mode == "Repeat last cached selection":
+            if last_selection and self._last_image_fingerprint.get(unique_id) == image_fingerprint:
+                selection = list(last_selection)
         elif mode == "Pass through":
             selection = list(range(batch))
         elif mode == "Take First n":
@@ -179,6 +188,8 @@ class BaseChooser(PreviewImage):
 
         selection = [idx for idx in selection if idx >= 0]
         MessageBroker.set_last_selection(unique_id, selection)
+        if image_fingerprint is not None:
+            self._last_image_fingerprint[unique_id] = image_fingerprint
 
         all_segments = []
         segs_shape = None

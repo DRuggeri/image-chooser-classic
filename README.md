@@ -45,6 +45,19 @@ Restart (or hard-refresh) ComfyUI so the new JavaScript files load. The **Add No
 - **Classic node** - keeps everything in the graph. The widget automatically resizes to show the entire batch.
 - **Hotkeys** - the chooser listens for 1-9 to toggle thumbnails, 0 to progress/cancel, and Esc to cancel.
 
+## Modes
+
+| Mode | Behaviour |
+|------|-----------|
+| **Always pause** | The chooser dialog opens on every run, regardless of what changed. This mode will cause all downstream nodes to re-run. |
+| **Repeat last selection** | After you pick once, subsequent runs apply the same selection *index* to whatever images are present, including new images. |
+| **Repeat last cached selection** | Like *Repeat last selection*, but also watches the image content. If the upstream images are identical to the previous run, the selection is repeated; if new images arrive, you can make a fresh choice. |
+| **Only pause if batch** | Skips the dialog when there is only a single image and auto-selects it; pauses to ask when there are two or more. |
+| **Progress first pick** | Pauses on the very first run; after that the workflow progresses automatically without asking again. |
+| **Pass through** | Never pauses — all images in the batch are forwarded downstream unchanged. |
+| **Take First n** | Silently selects the first *n* images (where *n* is the **count** widget value) without showing the dialog. |
+| **Take Last n** | Silently selects the last *n* images without showing the dialog. |
+
 ## Differences from the original project
 
 - No extraneous build metadata or auxiliary nodes – just the two chooser implementations.
