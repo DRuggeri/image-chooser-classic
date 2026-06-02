@@ -33,6 +33,7 @@ def _flatten_latents(latents_in: Optional[Sequence[Dict]]) -> List[Dict[str, tor
 
 class BaseChooser(PreviewImage):
     CATEGORY = "image_chooser"
+    DESCRIPTION = "Pauses the workflow so you can choose images from a batch and forward matching outputs."
     INPUT_IS_LIST = True
     OUTPUT_NODE = False
     FUNCTION = "func"
@@ -268,6 +269,7 @@ class BaseChooser(PreviewImage):
 class PreviewAndChooseClassic(BaseChooser):
     RETURN_TYPES = ("IMAGE", "LATENT", "MASK", "STRING", "SEGS")
     RETURN_NAMES = ("images", "latents", "masks", "selected", "segs")
+    DESCRIPTION = "Inline classic chooser widget that pauses execution for manual image selection."
 
     def chooser_type(self) -> str:
         return "classic_widget"
@@ -279,11 +281,13 @@ class PreviewAndChooseClassic(BaseChooser):
 class PreviewAndChoose(BaseChooser):
     RETURN_TYPES = ("IMAGE", "LATENT", "MASK", "STRING", "SEGS")
     RETURN_NAMES = ("images", "latents", "masks", "selected", "segs")
+    DESCRIPTION = "Overlay chooser that pauses execution so you can select one or more images."
 
 
 class SimpleChooser(PreviewAndChoose):
     RETURN_TYPES = ("IMAGE", "LATENT")
     RETURN_NAMES = ("images", "latents")
+    DESCRIPTION = "Lightweight chooser that returns selected images and latents only."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -301,6 +305,7 @@ class SimpleChooser(PreviewAndChoose):
 class PreviewAndChooseDouble(BaseChooser):
     RETURN_TYPES = ("LATENT", "LATENT")
     RETURN_NAMES = ("positive", "negative")
+    DESCRIPTION = "Split selected batch items into positive and negative latent groups."
 
     def chooser_type(self) -> str:
         return "double"
