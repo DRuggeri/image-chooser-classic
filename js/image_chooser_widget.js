@@ -3,10 +3,225 @@ import { api } from "../../scripts/api.js";
 import { send_message, send_cancel } from "./image_chooser_messaging.js";
 
 const EVENT_NAME = "cg-image-chooser-classic-widget-channel";
+const THUMBNAIL_RIGHT_CLICK_SETTING_ID = "ImageChooser.thumbnailRightClick";
+const THUMBNAIL_RIGHT_CLICK_DEFAULT = "Browser Default";
 const activeWidgets = new Map();
 let currentActiveNode = null;
 const FALLBACK_ASPECT = 1;
 const MIN_CELL_EDGE = 1;
+let middleDragActive = false;
+let middleDragPointerId = null;
+
+function canElementScroll(el, deltaY, deltaX) {
+    if (!(el instanceof HTMLElement)) return false;
+
+    const style = getComputedStyle(el);
+    const overflowY = style.overflowY;
+    const overflowX = style.overflowX;
+
+    const canScrollY =
+        (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+        el.scrollHeight > el.clientHeight + 1;
+    const canScrollX =
+        (overflowX === "auto" || overflowX === "scroll" || overflowX === "overlay") &&
+        el.scrollWidth > el.clientWidth + 1;
+
+    if (canScrollY && deltaY !== 0) {
+        if (deltaY < 0 && el.scrollTop > 0) return true;
+        const maxY = el.scrollHeight - el.clientHeight;
+        if (deltaY > 0 && el.scrollTop < maxY) return true;
+    }
+
+    if (canScrollX && deltaX !== 0) {
+        if (deltaX < 0 && el.scrollLeft > 0) return true;
+        const maxX = el.scrollWidth - el.clientWidth;
+        if (deltaX > 0 && el.scrollLeft < maxX) return true;
+    }
+
+    return false;
+}
+
+function shouldUseLocalScroll(startEl, boundaryEl, deltaY, deltaX) {
+    let node = startEl;
+    while (node && node !== boundaryEl) {
+        if (canElementScroll(node, deltaY, deltaX)) return true;
+        node = node.parentElement;
+    }
+    return canElementScroll(boundaryEl, deltaY, deltaX);
+}
+
+function getComfyCanvas() {
+    const canvas = app?.canvas ?? window?.app?.canvas;
+    return canvas ?? null;
+}
+
+function getGraphCanvasElement() {
+    const direct = app?.canvas?.canvas;
+    if (direct instanceof HTMLCanvasElement) return direct;
+
+    const nested = app?.canvas?.canvas?.canvas;
+    if (nested instanceof HTMLCanvasElement) return nested;
+
+    return document.querySelector("canvas") ?? null;
+}
+
+function forwardCanvasEvent(kind, event) {
+    const canvas = getComfyCanvas();
+    const methodMap = {
+        wheel: "processMouseWheel",
+        down: "processMouseDown",
+        move: "processMouseMove",
+        up: "processMouseUp",
+    };
+    const methodName = methodMap[kind];
+    if (canvas && typeof canvas[methodName] === "function") {
+        canvas[methodName](event);
+        return;
+    }
+
+    // Fallback for unusual environments where app.canvas handlers are unavailable.
+    const canvasEl = getGraphCanvasElement();
+    if (!canvasEl) return;
+
+    if (kind === "wheel") {
+        const forwarded = new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            deltaX: event.deltaX,
+            deltaY: event.deltaY,
+            deltaZ: event.deltaZ,
+            deltaMode: event.deltaMode,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            screenX: event.screenX,
+            screenY: event.screenY,
+            ctrlKey: event.ctrlKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            metaKey: event.metaKey,
+        });
+        canvasEl.dispatchEvent(forwarded);
+        return;
+    }
+
+    const typeMap = {
+        down: "mousedown",
+        move: "mousemove",
+        up: "mouseup",
+    };
+    const forwardedType = typeMap[kind];
+    const forwarded = new MouseEvent(forwardedType, {
+        bubbles: true,
+        cancelable: true,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        screenX: event.screenX,
+        screenY: event.screenY,
+        button: event.button,
+        buttons: event.buttons,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+    });
+    canvasEl.dispatchEvent(forwarded);
+}
+
+function handleWidgetWheel(event, container) {
+    if (shouldUseLocalScroll(event.target, container, event.deltaY, event.deltaX)) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    forwardCanvasEvent("wheel", event);
+}
+
+function stopMiddleDragForwarding() {
+    if (!middleDragActive) return;
+    middleDragActive = false;
+    middleDragPointerId = null;
+    window.removeEventListener("pointermove", handleWindowPointerMoveForPan, true);
+    window.removeEventListener("pointerup", handleWindowPointerUpForPan, true);
+    window.removeEventListener("pointercancel", handleWindowPointerUpForPan, true);
+    window.removeEventListener("blur", stopMiddleDragForwarding, true);
+}
+
+function handleWindowPointerMoveForPan(event) {
+    if (!middleDragActive) return;
+    if (middleDragPointerId !== null && event.pointerId !== middleDragPointerId) return;
+    if ((event.buttons & 4) !== 4) return;
+    event.preventDefault();
+    event.stopPropagation();
+    forwardCanvasEvent("move", event);
+}
+
+function handleWindowPointerUpForPan(event) {
+    if (!middleDragActive) return;
+    if (middleDragPointerId !== null && event.pointerId !== middleDragPointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    forwardCanvasEvent("up", event);
+    stopMiddleDragForwarding();
+}
+
+function handleWidgetPointerDown(event) {
+    // Forward middle-button drag to the graph canvas so pan works over the widget.
+    if (event.button !== 1) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    middleDragPointerId = event.pointerId;
+    forwardCanvasEvent("down", event);
+
+    if (!middleDragActive) {
+        middleDragActive = true;
+        window.addEventListener("pointermove", handleWindowPointerMoveForPan, true);
+        window.addEventListener("pointerup", handleWindowPointerUpForPan, true);
+        window.addEventListener("pointercancel", handleWindowPointerUpForPan, true);
+        window.addEventListener("blur", stopMiddleDragForwarding, true);
+    }
+}
+
+function handleWidgetAuxClick(event) {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+}
+
+
+function getThumbnailRightClickMode() {
+    if (!app?.ui?.settings) return THUMBNAIL_RIGHT_CLICK_DEFAULT;
+    return app.ui.settings.getSettingValue(
+        THUMBNAIL_RIGHT_CLICK_SETTING_ID,
+        THUMBNAIL_RIGHT_CLICK_DEFAULT
+    );
+}
+
+function openImageInNewTab(url) {
+    if (!url) return;
+    const newTab = window.open(url, "_blank", "noopener,noreferrer");
+    if (newTab) newTab.opener = null;
+}
+
+function handleThumbnailContextMenu(event, imageUrl) {
+    const mode = getThumbnailRightClickMode();
+
+    if (mode === "ComfyUI Node") {
+        // Let ComfyUI handle the node context menu.
+        return;
+    }
+
+    if (mode === "Open Image") {
+        event.preventDefault();
+        event.stopPropagation();
+        openImageInNewTab(imageUrl);
+        return;
+    }
+
+    // Browser Default: keep browser context menu, but stop node-level menu.
+    event.stopPropagation();
+}
 
 function ensureStyles() {
     if (document.getElementById("cg-image-chooser-widget-style")) return;
@@ -131,11 +346,31 @@ function ensureWidget(node) {
         cancelBtn: null,
         lastDetail: null,
         layout: null,
+        wheelHandler: null,
+        pointerDownHandler: null,
+        auxClickHandler: null,
     };
+
+    info.wheelHandler = (event) => handleWidgetWheel(event, container);
+    container.addEventListener("wheel", info.wheelHandler, { passive: false });
+    info.pointerDownHandler = (event) => handleWidgetPointerDown(event);
+    container.addEventListener("pointerdown", info.pointerDownHandler, { passive: false });
+    info.auxClickHandler = (event) => handleWidgetAuxClick(event);
+    container.addEventListener("auxclick", info.auxClickHandler, { passive: false });
+
     activeWidgets.set(node.id, info);
 
     const originalOnRemoved = node.onRemoved;
     node.onRemoved = function (...args) {
+        if (info.wheelHandler) {
+            container.removeEventListener("wheel", info.wheelHandler);
+        }
+        if (info.pointerDownHandler) {
+            container.removeEventListener("pointerdown", info.pointerDownHandler);
+        }
+        if (info.auxClickHandler) {
+            container.removeEventListener("auxclick", info.auxClickHandler);
+        }
         activeWidgets.delete(this.id);
         if (currentActiveNode === this) currentActiveNode = null;
         domWidget.onRemove?.();
@@ -485,6 +720,9 @@ function renderChooser(node, detail) {
                 updateThumbRatio(node, img.naturalWidth / img.naturalHeight);
             }
         });
+        cell.addEventListener("contextmenu", (event) => {
+            handleThumbnailContextMenu(event, img.src);
+        });
         cell.appendChild(img);
         cell.addEventListener("click", (event) => {
             event.preventDefault();
@@ -576,6 +814,7 @@ function handleKey(event) {
 }
 
 function clearWidgetState() {
+    stopMiddleDragForwarding();
     activeWidgets.forEach((info, nodeId) => {
         info.grid?.querySelectorAll(".cg-chooser-cell").forEach((cell) => cell.classList.remove("selected"));
         if (info.progressBtn) info.progressBtn.disabled = true;
