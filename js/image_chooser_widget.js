@@ -11,6 +11,14 @@ const FALLBACK_ASPECT = 1;
 const MIN_CELL_EDGE = 1;
 let middleDragActive = false;
 let middleDragPointerId = null;
+const alertAudio = new Audio("extensions/image-chooser-classic/ding.mp3");
+
+function playAlertIfEnabled() {
+    if (app?.ui?.settings?.getSettingValue("ImageChooser.alert", true)) {
+        alertAudio.currentTime = 0;
+        alertAudio.play().catch(() => {});
+    }
+}
 
 function canElementScroll(el, deltaY, deltaX) {
     if (!(el instanceof HTMLElement)) return false;
@@ -832,6 +840,7 @@ app.registerExtension({
     },
     setup() {
         api.addEventListener(EVENT_NAME, (evt) => {
+            playAlertIfEnabled();
             handleEvent(evt.detail ?? {});
         });
         api.addEventListener("execution_start", clearWidgetState);
