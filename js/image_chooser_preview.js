@@ -138,6 +138,13 @@ function injectStyles() {
     .cg-btn-cancel:hover {
         background: #b33a3a;
     }
+    .cg-btn-rerun {
+        background: #2f3138;
+        color: #f2f2f2;
+    }
+    .cg-btn-rerun:hover {
+        background: #8a6a00;
+    }
     .cg-btn-progress {
         background: #4caf50;
         color: #0f0f0f;
@@ -200,6 +207,7 @@ function openChooser(event) {
         grid: null,
         progressButton: null,
         cancelButton: null,
+        rerunButton: null,
         sending: false,
     };
 
@@ -278,6 +286,15 @@ function openChooser(event) {
         closeChooser("cancel");
     });
 
+    const rerunBtn = document.createElement("button");
+    rerunBtn.className = "cg-btn-rerun";
+    rerunBtn.textContent = "Rerun";
+    rerunBtn.addEventListener("click", () => {
+        send_cancel();
+        closeChooser("rerun");
+        app.queuePrompt(0, 1);
+    });
+
     const progressBtn = document.createElement("button");
     progressBtn.className = "cg-btn-progress";
     progressBtn.textContent = "Progress";
@@ -286,8 +303,10 @@ function openChooser(event) {
 
     session.progressButton = progressBtn;
     session.cancelButton = cancelBtn;
+    session.rerunButton = rerunBtn;
 
     actions.appendChild(cancelBtn);
+    actions.appendChild(rerunBtn);
     actions.appendChild(progressBtn);
 
     panel.appendChild(header);
