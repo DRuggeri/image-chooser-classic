@@ -305,6 +305,10 @@ function ensureStyles() {
         background: #c54a4a;
         color: #fff;
     }
+    .cg-chooser-rerun {
+        background: #8a6a00;
+        color: #fff;
+    }
     `;
     document.head.appendChild(style);
 }
@@ -705,7 +709,17 @@ function renderChooser(node, detail) {
     });
     info.cancelBtn = cancelBtn;
 
+    const rerunBtn = document.createElement("button");
+    rerunBtn.className = "cg-chooser-rerun";
+    rerunBtn.textContent = "Rerun";
+    rerunBtn.addEventListener("click", () => {
+        send_cancel();
+        clearSelection(node);
+        app.queuePrompt(0, 1);
+    });
+
     footer.appendChild(cancelBtn);
+    footer.appendChild(rerunBtn);
     footer.appendChild(progressBtn);
     container.appendChild(stage);
     container.appendChild(footer);
