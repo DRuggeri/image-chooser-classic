@@ -241,8 +241,10 @@ function ensureStyles() {
         flex-direction: column;
         gap: 8px;
         width: 100%;
+        height: 100%;
         box-sizing: border-box;
         padding: 12px;
+        overflow: hidden;
     }
     .cg-chooser-grid-stage {
         flex: 1;
@@ -252,11 +254,15 @@ function ensureStyles() {
         align-items: center;
         justify-content: center;
         position: relative;
+        overflow: hidden;
     }
     .cg-chooser-grid {
         display: grid;
         gap: 6px;
         width: 100%;
+        max-width: 100%;
+        max-height: 100%;
+        overflow: hidden;
     }
     .cg-chooser-cell {
         position: relative;
@@ -282,9 +288,11 @@ function ensureStyles() {
     }
     .cg-chooser-footer {
         display: flex;
+        flex: 0 0 auto;
         justify-content: flex-end;
         gap: 8px;
         margin-top: 4px;
+        overflow: hidden;
     }
     .cg-chooser-footer button {
         border: none;
@@ -643,11 +651,7 @@ function applyLayout(node, detail, info, options = {}) {
     grid.style.alignContent = "center";
     grid.style.transform = "scale(1)";
 
-    const nodeHeight = Number(node.size?.[1]);
-    const enforceMinHeight = node._ic_userSized
-        ? Math.min(layout.preferredHeight, Number.isFinite(nodeHeight) ? nodeHeight : layout.preferredHeight)
-        : layout.preferredHeight;
-    container.style.minHeight = `${Math.max(0, enforceMinHeight)}px`;
+    container.style.minHeight = "0px";
 
     if (info.domWidget) {
         info.domWidget.computeSize = () => [layout.preferredWidth, layout.preferredHeight];
