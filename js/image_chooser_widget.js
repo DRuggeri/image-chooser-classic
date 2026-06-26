@@ -281,8 +281,7 @@ function ensureStyles() {
     }
     .cg-chooser-cell img {
         width: 100%;
-        height: auto;
-        max-height: 100%;
+        height: 100%;
         object-fit: contain;
         display: block;
     }
@@ -291,7 +290,6 @@ function ensureStyles() {
         flex: 0 0 auto;
         justify-content: flex-end;
         gap: 8px;
-        margin-top: 4px;
         overflow: hidden;
     }
     .cg-chooser-footer button {
@@ -354,8 +352,15 @@ function ensureWidget(node) {
             return null;
         },
         setValue() {},
+        hideOnZoom: false,
     });
     domWidget.serialize = false;
+    if (domWidget.element instanceof HTMLElement) {
+        domWidget.element.style.overflow = "hidden";
+        if (domWidget.element.parentElement instanceof HTMLElement) {
+            domWidget.element.parentElement.style.overflow = "hidden";
+        }
+    }
 
     info = {
         container,
@@ -425,33 +430,19 @@ function extractRatioFromDetail(detail) {
     return hint > 0 ? hint : null;
 }
 
-function updateThumbRatio(node, ratio) {
-    if (!Number.isFinite(ratio) || ratio <= 0) return;
-    const prev = Number(node._ic_thumb_ratio);
-    const delta = Math.abs((prev || FALLBACK_ASPECT) - ratio);
-    if (!prev || delta > 0.01) {
-        node._ic_thumb_ratio = ratio;
-        requestLayoutUpdate(node);
-    } else {
-        node._ic_thumb_ratio = ratio;
-    }
-}
-
 function getThumbRatio(node, detail) {
     const cached = Number(node?._ic_thumb_ratio);
     if (cached > 0) return cached;
     const derived = extractRatioFromDetail(detail);
-    if (derived && derived > 0) {
-        node._ic_thumb_ratio = derived;
-        return derived;
-    }
-    return FALLBACK_ASPECT;
+    const ratio = Number.isFinite(derived) && derived > 0 ? derived : FALLBACK_ASPECT;
+    node._ic_thumb_ratio = ratio;
+    return ratio;
 }
 
 function formatPx(value) {
     if (!Number.isFinite(value)) return "0px";
     if (value < 0) value = 0;
-    const rounded = Math.round(value * 100) / 100;
+    const rounded = Math.floor(value * 100) / 100;
     return `${rounded}px`;
 }
 
@@ -462,7 +453,7 @@ function determineLayout(node, detail) {
     const maxAutoHeight = 420;
     const baseGap = 6;
     const padding = 12;
-    const footerHeight = 42;
+    const footerHeight = 52;
     const ratio = getThumbRatio(node, detail);
 
     const size = node.size ?? [];
@@ -510,16 +501,14 @@ function determineLayout(node, detail) {
 
         const usedWidth = columns * cellWidth + (columns - 1) * columnGap;
         const usedHeight = rows * cellHeight + (rows - 1) * rowGap;
-        if (usedWidth > availableWidth + 0.5 || usedHeight > availableHeight + 0.5) {
-            continue;
-        }
+        if (usedWidth > availableWidth + 0.5 || usedHeight > availableHeight + 0.5) continue;
 
         const widthUsage = usedWidth / availableWidth;
         const heightUsage = usedHeight / availableHeight;
         const balance = Math.abs(columns - rows);
         const sizeScore = cellWidth * cellHeight;
         const fillPenalty = Math.abs(1 - widthUsage) + Math.abs(1 - heightUsage);
-        const score = sizeScore - fillPenalty * sizeScore * 0.1 - emptySlots * 0.01 - balance * 0.05;
+        const score = sizeScore - fillPenalty * sizeScore * 0.15 - emptySlots * 0.01 - balance * 0.05;
 
         if (!bestLayout || score > bestLayout.score) {
             bestLayout = {
@@ -537,7 +526,7 @@ function determineLayout(node, detail) {
     }
 
     if (!bestLayout) {
-        // Fallback: single column scaled to fit height
+        // Fallback: single column that fills the available space.
         const columnGap = Math.min(baseGap, availableWidth / 12);
         const rowGap = Math.min(baseGap, availableHeight / Math.max(imageCount * 2, 1));
         const rows = imageCount;
@@ -677,6 +666,11 @@ function requestLayoutUpdate(node) {
     });
 }
 
+function getCanvasZoom() {
+    const zoom = Number(app?.canvas?.ds?.scale);
+    return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+}
+
 function renderChooser(node, detail) {
     const info = ensureWidget(node);
     info.lastDetail = detail;
@@ -728,24 +722,37 @@ function renderChooser(node, detail) {
     container.appendChild(stage);
     container.appendChild(footer);
 
+    const sharedRatio = getThumbRatio(node, detail);
+    const cellAspect = Number.isFinite(sharedRatio) && sharedRatio > 0
+        ? `${sharedRatio}` : "1";
+
     node._ic_selection = new Set();
     (detail.urls ?? []).forEach((u, idx) => {
         const cell = document.createElement("div");
         cell.className = "cg-chooser-cell";
         cell.dataset.index = String(idx);
-        cell.style.aspectRatio = "1 / 1";
+        cell.style.aspectRatio = cellAspect;
 
         const img = document.createElement("img");
         img.src = api.apiURL(
             `/view?filename=${encodeURIComponent(u.filename)}&type=${u.type}&subfolder=${encodeURIComponent(u.subfolder ?? "")}`
         );
         img.alt = `Image ${idx + 1}`;
-        img.addEventListener("load", () => {
-            if (img.naturalWidth && img.naturalHeight) {
-                cell.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
-                updateThumbRatio(node, img.naturalWidth / img.naturalHeight);
-            }
-        });
+        if (idx === 0) {
+            img.addEventListener("load", () => {
+                if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    const loadedRatio = img.naturalWidth / img.naturalHeight;
+                    if (Math.abs(loadedRatio - sharedRatio) > 0.01) {
+                        node._ic_thumb_ratio = loadedRatio;
+                        const newAspect = String(loadedRatio);
+                        info.grid?.querySelectorAll(".cg-chooser-cell").forEach((c) => {
+                            c.style.aspectRatio = newAspect;
+                        });
+                        requestLayoutUpdate(node);
+                    }
+                }
+            }, { once: true });
+        }
         cell.addEventListener("contextmenu", (event) => {
             handleThumbnailContextMenu(event, img.src);
         });
@@ -873,6 +880,21 @@ app.registerExtension({
             nodeType.prototype.onAdded = function (...args) {
                 const res = originalOnAdded?.apply(this, args);
                 ensureWidget(this);
+                return res;
+            };
+
+            const originalOnDrawForeground = nodeType.prototype.onDrawForeground;
+            nodeType.prototype.onDrawForeground = function (...args) {
+                const res = originalOnDrawForeground?.apply(this, args);
+                const info = activeWidgets.get(this.id);
+                if (!info) return res;
+
+                const zoom = getCanvasZoom();
+                if (info.lastZoom !== zoom) {
+                    info.lastZoom = zoom;
+                    requestLayoutUpdate(this);
+                }
+
                 return res;
             };
         }

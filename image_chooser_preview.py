@@ -166,6 +166,12 @@ class BaseChooser(PreviewImage):
         preview_payload = flat_images
         ret = self.save_images(images=preview_payload, **kwargs)
 
+        aspect_ratio: Optional[float] = None
+        if flat_images:
+            h, w = flat_images[0].shape[0], flat_images[0].shape[1]
+            if h > 0 and w > 0:
+                aspect_ratio = w / h
+
         context = {
             "unique_id": unique_id,
             "display_id": display_id,
@@ -178,6 +184,7 @@ class BaseChooser(PreviewImage):
             "has_latents": len(flat_latents) > 0,
             "has_masks": len(flat_masks) > 0,
             "has_segs": doing_segs,
+            "aspect_ratio": aspect_ratio,
         }
 
         if selection is None:
