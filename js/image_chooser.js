@@ -17,6 +17,15 @@ function ensureSettings() {
         type: "boolean",
         defaultValue: true,
     });
+    app.ui.settings.addSetting({
+        id: "ImageChooser.thumbnailRightClick",
+        name: "Thumbnail Right Click",
+        type: "combo",
+        options: ["Browser Default", "ComfyUI Node", "Open Image"],
+        defaultValue: "Browser Default",
+        tooltip:
+            "Choose what happens when right clicking a thumbnail. Browser Default opens your browser's context menu, ComfyUI Node opens the node's context menu, and Open Image opens the image in a new tab.",
+    });
 }
 
 const alertAudio = new Audio("extensions/image-chooser-classic/ding.mp3");

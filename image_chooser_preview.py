@@ -33,11 +33,13 @@ def _flatten_latents(latents_in: Optional[Sequence[Dict]]) -> List[Dict[str, tor
 
 class BaseChooser(PreviewImage):
     CATEGORY = "image_chooser"
+    DESCRIPTION = "Pauses the workflow so you can choose images from a batch and forward matching outputs."
     INPUT_IS_LIST = True
     OUTPUT_NODE = False
     FUNCTION = "func"
 
     _last_ic: Dict[str, float] = {}
+    _last_image_fingerprint: Dict[str, object] = {}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -47,6 +49,7 @@ class BaseChooser(PreviewImage):
                     [
                         "Always pause",
                         "Repeat last selection",
+                        "Repeat last cached selection",
                         "Only pause if batch",
                         "Progress first pick",
                         "Pass through",
@@ -70,7 +73,7 @@ class BaseChooser(PreviewImage):
     def IS_CHANGED(cls, id, **kwargs):
         mode = kwargs.get("mode", ["Always pause"])
         node_id = str(id[0])
-        if mode[0] != "Repeat last selection" or node_id not in cls._last_ic:
+        if mode[0] not in ("Repeat last selection", "Repeat last cached selection") or node_id not in cls._last_ic:
             cls._last_ic[node_id] = random.random()
         return cls._last_ic[node_id]
 
@@ -138,11 +141,18 @@ class BaseChooser(PreviewImage):
         for key in list(kwargs.keys()):
             kwargs[key] = kwargs[key][0]
 
+        image_fingerprint = None
+        if mode == "Repeat last cached selection":
+            image_fingerprint = tuple((tuple(img.shape), img.sum().item()) for img in flat_images)
+
         selection: Optional[List[int]] = None
         last_selection = MessageBroker.get_last_selection(unique_id)
 
         if mode == "Repeat last selection" and last_selection:
             selection = list(last_selection)
+        elif mode == "Repeat last cached selection":
+            if last_selection and self._last_image_fingerprint.get(unique_id) == image_fingerprint:
+                selection = list(last_selection)
         elif mode == "Pass through":
             selection = list(range(batch))
         elif mode == "Take First n":
@@ -156,6 +166,12 @@ class BaseChooser(PreviewImage):
         preview_payload = flat_images
         ret = self.save_images(images=preview_payload, **kwargs)
 
+        aspect_ratio: Optional[float] = None
+        if flat_images:
+            h, w = flat_images[0].shape[0], flat_images[0].shape[1]
+            if h > 0 and w > 0:
+                aspect_ratio = w / h
+
         context = {
             "unique_id": unique_id,
             "display_id": display_id,
@@ -168,6 +184,7 @@ class BaseChooser(PreviewImage):
             "has_latents": len(flat_latents) > 0,
             "has_masks": len(flat_masks) > 0,
             "has_segs": doing_segs,
+            "aspect_ratio": aspect_ratio,
         }
 
         if selection is None:
@@ -179,6 +196,8 @@ class BaseChooser(PreviewImage):
 
         selection = [idx for idx in selection if idx >= 0]
         MessageBroker.set_last_selection(unique_id, selection)
+        if image_fingerprint is not None:
+            self._last_image_fingerprint[unique_id] = image_fingerprint
 
         all_segments = []
         segs_shape = None
@@ -257,6 +276,7 @@ class BaseChooser(PreviewImage):
 class PreviewAndChooseClassic(BaseChooser):
     RETURN_TYPES = ("IMAGE", "LATENT", "MASK", "STRING", "SEGS")
     RETURN_NAMES = ("images", "latents", "masks", "selected", "segs")
+    DESCRIPTION = "Inline classic chooser widget that pauses execution for manual image selection."
 
     def chooser_type(self) -> str:
         return "classic_widget"
@@ -268,11 +288,13 @@ class PreviewAndChooseClassic(BaseChooser):
 class PreviewAndChoose(BaseChooser):
     RETURN_TYPES = ("IMAGE", "LATENT", "MASK", "STRING", "SEGS")
     RETURN_NAMES = ("images", "latents", "masks", "selected", "segs")
+    DESCRIPTION = "Overlay chooser that pauses execution so you can select one or more images."
 
 
 class SimpleChooser(PreviewAndChoose):
     RETURN_TYPES = ("IMAGE", "LATENT")
     RETURN_NAMES = ("images", "latents")
+    DESCRIPTION = "Lightweight chooser that returns selected images and latents only."
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -290,6 +312,7 @@ class SimpleChooser(PreviewAndChoose):
 class PreviewAndChooseDouble(BaseChooser):
     RETURN_TYPES = ("LATENT", "LATENT")
     RETURN_NAMES = ("positive", "negative")
+    DESCRIPTION = "Split selected batch items into positive and negative latent groups."
 
     def chooser_type(self) -> str:
         return "double"

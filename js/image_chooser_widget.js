@@ -3,10 +3,233 @@ import { api } from "../../scripts/api.js";
 import { send_message, send_cancel } from "./image_chooser_messaging.js";
 
 const EVENT_NAME = "cg-image-chooser-classic-widget-channel";
+const THUMBNAIL_RIGHT_CLICK_SETTING_ID = "ImageChooser.thumbnailRightClick";
+const THUMBNAIL_RIGHT_CLICK_DEFAULT = "Browser Default";
 const activeWidgets = new Map();
 let currentActiveNode = null;
 const FALLBACK_ASPECT = 1;
 const MIN_CELL_EDGE = 1;
+let middleDragActive = false;
+let middleDragPointerId = null;
+const alertAudio = new Audio("extensions/image-chooser-classic/ding.mp3");
+
+function playAlertIfEnabled() {
+    if (app?.ui?.settings?.getSettingValue("ImageChooser.alert", true)) {
+        alertAudio.currentTime = 0;
+        alertAudio.play().catch(() => {});
+    }
+}
+
+function canElementScroll(el, deltaY, deltaX) {
+    if (!(el instanceof HTMLElement)) return false;
+
+    const style = getComputedStyle(el);
+    const overflowY = style.overflowY;
+    const overflowX = style.overflowX;
+
+    const canScrollY =
+        (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+        el.scrollHeight > el.clientHeight + 1;
+    const canScrollX =
+        (overflowX === "auto" || overflowX === "scroll" || overflowX === "overlay") &&
+        el.scrollWidth > el.clientWidth + 1;
+
+    if (canScrollY && deltaY !== 0) {
+        if (deltaY < 0 && el.scrollTop > 0) return true;
+        const maxY = el.scrollHeight - el.clientHeight;
+        if (deltaY > 0 && el.scrollTop < maxY) return true;
+    }
+
+    if (canScrollX && deltaX !== 0) {
+        if (deltaX < 0 && el.scrollLeft > 0) return true;
+        const maxX = el.scrollWidth - el.clientWidth;
+        if (deltaX > 0 && el.scrollLeft < maxX) return true;
+    }
+
+    return false;
+}
+
+function shouldUseLocalScroll(startEl, boundaryEl, deltaY, deltaX) {
+    let node = startEl;
+    while (node && node !== boundaryEl) {
+        if (canElementScroll(node, deltaY, deltaX)) return true;
+        node = node.parentElement;
+    }
+    return canElementScroll(boundaryEl, deltaY, deltaX);
+}
+
+function getComfyCanvas() {
+    const canvas = app?.canvas ?? window?.app?.canvas;
+    return canvas ?? null;
+}
+
+function getGraphCanvasElement() {
+    const direct = app?.canvas?.canvas;
+    if (direct instanceof HTMLCanvasElement) return direct;
+
+    const nested = app?.canvas?.canvas?.canvas;
+    if (nested instanceof HTMLCanvasElement) return nested;
+
+    return document.querySelector("canvas") ?? null;
+}
+
+function forwardCanvasEvent(kind, event) {
+    const canvas = getComfyCanvas();
+    const methodMap = {
+        wheel: "processMouseWheel",
+        down: "processMouseDown",
+        move: "processMouseMove",
+        up: "processMouseUp",
+    };
+    const methodName = methodMap[kind];
+    if (canvas && typeof canvas[methodName] === "function") {
+        canvas[methodName](event);
+        return;
+    }
+
+    // Fallback for unusual environments where app.canvas handlers are unavailable.
+    const canvasEl = getGraphCanvasElement();
+    if (!canvasEl) return;
+
+    if (kind === "wheel") {
+        const forwarded = new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            deltaX: event.deltaX,
+            deltaY: event.deltaY,
+            deltaZ: event.deltaZ,
+            deltaMode: event.deltaMode,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            screenX: event.screenX,
+            screenY: event.screenY,
+            ctrlKey: event.ctrlKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            metaKey: event.metaKey,
+        });
+        canvasEl.dispatchEvent(forwarded);
+        return;
+    }
+
+    const typeMap = {
+        down: "mousedown",
+        move: "mousemove",
+        up: "mouseup",
+    };
+    const forwardedType = typeMap[kind];
+    const forwarded = new MouseEvent(forwardedType, {
+        bubbles: true,
+        cancelable: true,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        screenX: event.screenX,
+        screenY: event.screenY,
+        button: event.button,
+        buttons: event.buttons,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+    });
+    canvasEl.dispatchEvent(forwarded);
+}
+
+function handleWidgetWheel(event, container) {
+    if (shouldUseLocalScroll(event.target, container, event.deltaY, event.deltaX)) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    forwardCanvasEvent("wheel", event);
+}
+
+function stopMiddleDragForwarding() {
+    if (!middleDragActive) return;
+    middleDragActive = false;
+    middleDragPointerId = null;
+    window.removeEventListener("pointermove", handleWindowPointerMoveForPan, true);
+    window.removeEventListener("pointerup", handleWindowPointerUpForPan, true);
+    window.removeEventListener("pointercancel", handleWindowPointerUpForPan, true);
+    window.removeEventListener("blur", stopMiddleDragForwarding, true);
+}
+
+function handleWindowPointerMoveForPan(event) {
+    if (!middleDragActive) return;
+    if (middleDragPointerId !== null && event.pointerId !== middleDragPointerId) return;
+    if ((event.buttons & 4) !== 4) return;
+    event.preventDefault();
+    event.stopPropagation();
+    forwardCanvasEvent("move", event);
+}
+
+function handleWindowPointerUpForPan(event) {
+    if (!middleDragActive) return;
+    if (middleDragPointerId !== null && event.pointerId !== middleDragPointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    forwardCanvasEvent("up", event);
+    stopMiddleDragForwarding();
+}
+
+function handleWidgetPointerDown(event) {
+    // Forward middle-button drag to the graph canvas so pan works over the widget.
+    if (event.button !== 1) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    middleDragPointerId = event.pointerId;
+    forwardCanvasEvent("down", event);
+
+    if (!middleDragActive) {
+        middleDragActive = true;
+        window.addEventListener("pointermove", handleWindowPointerMoveForPan, true);
+        window.addEventListener("pointerup", handleWindowPointerUpForPan, true);
+        window.addEventListener("pointercancel", handleWindowPointerUpForPan, true);
+        window.addEventListener("blur", stopMiddleDragForwarding, true);
+    }
+}
+
+function handleWidgetAuxClick(event) {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+}
+
+
+function getThumbnailRightClickMode() {
+    if (!app?.ui?.settings) return THUMBNAIL_RIGHT_CLICK_DEFAULT;
+    return app.ui.settings.getSettingValue(
+        THUMBNAIL_RIGHT_CLICK_SETTING_ID,
+        THUMBNAIL_RIGHT_CLICK_DEFAULT
+    );
+}
+
+function openImageInNewTab(url) {
+    if (!url) return;
+    const newTab = window.open(url, "_blank", "noopener,noreferrer");
+    if (newTab) newTab.opener = null;
+}
+
+function handleThumbnailContextMenu(event, imageUrl) {
+    const mode = getThumbnailRightClickMode();
+
+    if (mode === "ComfyUI Node") {
+        // Let ComfyUI handle the node context menu.
+        return;
+    }
+
+    if (mode === "Open Image") {
+        event.preventDefault();
+        event.stopPropagation();
+        openImageInNewTab(imageUrl);
+        return;
+    }
+
+    // Browser Default: keep browser context menu, but stop node-level menu.
+    event.stopPropagation();
+}
 
 function ensureStyles() {
     if (document.getElementById("cg-image-chooser-widget-style")) return;
@@ -18,8 +241,10 @@ function ensureStyles() {
         flex-direction: column;
         gap: 8px;
         width: 100%;
+        height: 100%;
         box-sizing: border-box;
         padding: 12px;
+        overflow: hidden;
     }
     .cg-chooser-grid-stage {
         flex: 1;
@@ -29,11 +254,15 @@ function ensureStyles() {
         align-items: center;
         justify-content: center;
         position: relative;
+        overflow: hidden;
     }
     .cg-chooser-grid {
         display: grid;
         gap: 6px;
         width: 100%;
+        max-width: 100%;
+        max-height: 100%;
+        overflow: hidden;
     }
     .cg-chooser-cell {
         position: relative;
@@ -52,16 +281,16 @@ function ensureStyles() {
     }
     .cg-chooser-cell img {
         width: 100%;
-        height: auto;
-        max-height: 100%;
+        height: 100%;
         object-fit: contain;
         display: block;
     }
     .cg-chooser-footer {
         display: flex;
+        flex: 0 0 auto;
         justify-content: flex-end;
         gap: 8px;
-        margin-top: 4px;
+        overflow: hidden;
     }
     .cg-chooser-footer button {
         border: none;
@@ -80,6 +309,10 @@ function ensureStyles() {
     }
     .cg-chooser-cancel {
         background: #c54a4a;
+        color: #fff;
+    }
+    .cg-chooser-rerun {
+        background: #8a6a00;
         color: #fff;
     }
     `;
@@ -119,8 +352,15 @@ function ensureWidget(node) {
             return null;
         },
         setValue() {},
+        hideOnZoom: false,
     });
     domWidget.serialize = false;
+    if (domWidget.element instanceof HTMLElement) {
+        domWidget.element.style.overflow = "hidden";
+        if (domWidget.element.parentElement instanceof HTMLElement) {
+            domWidget.element.parentElement.style.overflow = "hidden";
+        }
+    }
 
     info = {
         container,
@@ -131,11 +371,31 @@ function ensureWidget(node) {
         cancelBtn: null,
         lastDetail: null,
         layout: null,
+        wheelHandler: null,
+        pointerDownHandler: null,
+        auxClickHandler: null,
     };
+
+    info.wheelHandler = (event) => handleWidgetWheel(event, container);
+    container.addEventListener("wheel", info.wheelHandler, { passive: false });
+    info.pointerDownHandler = (event) => handleWidgetPointerDown(event);
+    container.addEventListener("pointerdown", info.pointerDownHandler, { passive: false });
+    info.auxClickHandler = (event) => handleWidgetAuxClick(event);
+    container.addEventListener("auxclick", info.auxClickHandler, { passive: false });
+
     activeWidgets.set(node.id, info);
 
     const originalOnRemoved = node.onRemoved;
     node.onRemoved = function (...args) {
+        if (info.wheelHandler) {
+            container.removeEventListener("wheel", info.wheelHandler);
+        }
+        if (info.pointerDownHandler) {
+            container.removeEventListener("pointerdown", info.pointerDownHandler);
+        }
+        if (info.auxClickHandler) {
+            container.removeEventListener("auxclick", info.auxClickHandler);
+        }
         activeWidgets.delete(this.id);
         if (currentActiveNode === this) currentActiveNode = null;
         domWidget.onRemove?.();
@@ -170,33 +430,19 @@ function extractRatioFromDetail(detail) {
     return hint > 0 ? hint : null;
 }
 
-function updateThumbRatio(node, ratio) {
-    if (!Number.isFinite(ratio) || ratio <= 0) return;
-    const prev = Number(node._ic_thumb_ratio);
-    const delta = Math.abs((prev || FALLBACK_ASPECT) - ratio);
-    if (!prev || delta > 0.01) {
-        node._ic_thumb_ratio = ratio;
-        requestLayoutUpdate(node);
-    } else {
-        node._ic_thumb_ratio = ratio;
-    }
-}
-
 function getThumbRatio(node, detail) {
     const cached = Number(node?._ic_thumb_ratio);
     if (cached > 0) return cached;
     const derived = extractRatioFromDetail(detail);
-    if (derived && derived > 0) {
-        node._ic_thumb_ratio = derived;
-        return derived;
-    }
-    return FALLBACK_ASPECT;
+    const ratio = Number.isFinite(derived) && derived > 0 ? derived : FALLBACK_ASPECT;
+    node._ic_thumb_ratio = ratio;
+    return ratio;
 }
 
 function formatPx(value) {
     if (!Number.isFinite(value)) return "0px";
     if (value < 0) value = 0;
-    const rounded = Math.round(value * 100) / 100;
+    const rounded = Math.floor(value * 100) / 100;
     return `${rounded}px`;
 }
 
@@ -207,7 +453,7 @@ function determineLayout(node, detail) {
     const maxAutoHeight = 420;
     const baseGap = 6;
     const padding = 12;
-    const footerHeight = 42;
+    const footerHeight = 52;
     const ratio = getThumbRatio(node, detail);
 
     const size = node.size ?? [];
@@ -255,16 +501,14 @@ function determineLayout(node, detail) {
 
         const usedWidth = columns * cellWidth + (columns - 1) * columnGap;
         const usedHeight = rows * cellHeight + (rows - 1) * rowGap;
-        if (usedWidth > availableWidth + 0.5 || usedHeight > availableHeight + 0.5) {
-            continue;
-        }
+        if (usedWidth > availableWidth + 0.5 || usedHeight > availableHeight + 0.5) continue;
 
         const widthUsage = usedWidth / availableWidth;
         const heightUsage = usedHeight / availableHeight;
         const balance = Math.abs(columns - rows);
         const sizeScore = cellWidth * cellHeight;
         const fillPenalty = Math.abs(1 - widthUsage) + Math.abs(1 - heightUsage);
-        const score = sizeScore - fillPenalty * sizeScore * 0.1 - emptySlots * 0.01 - balance * 0.05;
+        const score = sizeScore - fillPenalty * sizeScore * 0.15 - emptySlots * 0.01 - balance * 0.05;
 
         if (!bestLayout || score > bestLayout.score) {
             bestLayout = {
@@ -282,7 +526,7 @@ function determineLayout(node, detail) {
     }
 
     if (!bestLayout) {
-        // Fallback: single column scaled to fit height
+        // Fallback: single column that fills the available space.
         const columnGap = Math.min(baseGap, availableWidth / 12);
         const rowGap = Math.min(baseGap, availableHeight / Math.max(imageCount * 2, 1));
         const rows = imageCount;
@@ -396,11 +640,7 @@ function applyLayout(node, detail, info, options = {}) {
     grid.style.alignContent = "center";
     grid.style.transform = "scale(1)";
 
-    const nodeHeight = Number(node.size?.[1]);
-    const enforceMinHeight = node._ic_userSized
-        ? Math.min(layout.preferredHeight, Number.isFinite(nodeHeight) ? nodeHeight : layout.preferredHeight)
-        : layout.preferredHeight;
-    container.style.minHeight = `${Math.max(0, enforceMinHeight)}px`;
+    container.style.minHeight = "0px";
 
     if (info.domWidget) {
         info.domWidget.computeSize = () => [layout.preferredWidth, layout.preferredHeight];
@@ -424,6 +664,11 @@ function requestLayoutUpdate(node) {
         if (!info?.grid) return;
         applyLayout(node, detail, info, { allowSizeUpdate: false });
     });
+}
+
+function getCanvasZoom() {
+    const zoom = Number(app?.canvas?.ds?.scale);
+    return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
 }
 
 function renderChooser(node, detail) {
@@ -462,28 +707,54 @@ function renderChooser(node, detail) {
     });
     info.cancelBtn = cancelBtn;
 
+    const rerunBtn = document.createElement("button");
+    rerunBtn.className = "cg-chooser-rerun";
+    rerunBtn.textContent = "Rerun";
+    rerunBtn.addEventListener("click", () => {
+        send_cancel();
+        clearSelection(node);
+        app.queuePrompt(0, 1);
+    });
+
     footer.appendChild(cancelBtn);
+    footer.appendChild(rerunBtn);
     footer.appendChild(progressBtn);
     container.appendChild(stage);
     container.appendChild(footer);
+
+    const sharedRatio = getThumbRatio(node, detail);
+    const cellAspect = Number.isFinite(sharedRatio) && sharedRatio > 0
+        ? `${sharedRatio}` : "1";
 
     node._ic_selection = new Set();
     (detail.urls ?? []).forEach((u, idx) => {
         const cell = document.createElement("div");
         cell.className = "cg-chooser-cell";
         cell.dataset.index = String(idx);
-        cell.style.aspectRatio = "1 / 1";
+        cell.style.aspectRatio = cellAspect;
 
         const img = document.createElement("img");
         img.src = api.apiURL(
             `/view?filename=${encodeURIComponent(u.filename)}&type=${u.type}&subfolder=${encodeURIComponent(u.subfolder ?? "")}`
         );
         img.alt = `Image ${idx + 1}`;
-        img.addEventListener("load", () => {
-            if (img.naturalWidth && img.naturalHeight) {
-                cell.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
-                updateThumbRatio(node, img.naturalWidth / img.naturalHeight);
-            }
+        if (idx === 0) {
+            img.addEventListener("load", () => {
+                if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    const loadedRatio = img.naturalWidth / img.naturalHeight;
+                    if (Math.abs(loadedRatio - sharedRatio) > 0.01) {
+                        node._ic_thumb_ratio = loadedRatio;
+                        const newAspect = String(loadedRatio);
+                        info.grid?.querySelectorAll(".cg-chooser-cell").forEach((c) => {
+                            c.style.aspectRatio = newAspect;
+                        });
+                        requestLayoutUpdate(node);
+                    }
+                }
+            }, { once: true });
+        }
+        cell.addEventListener("contextmenu", (event) => {
+            handleThumbnailContextMenu(event, img.src);
         });
         cell.appendChild(img);
         cell.addEventListener("click", (event) => {
@@ -576,6 +847,7 @@ function handleKey(event) {
 }
 
 function clearWidgetState() {
+    stopMiddleDragForwarding();
     activeWidgets.forEach((info, nodeId) => {
         info.grid?.querySelectorAll(".cg-chooser-cell").forEach((cell) => cell.classList.remove("selected"));
         if (info.progressBtn) info.progressBtn.disabled = true;
@@ -593,6 +865,7 @@ app.registerExtension({
     },
     setup() {
         api.addEventListener(EVENT_NAME, (evt) => {
+            playAlertIfEnabled();
             handleEvent(evt.detail ?? {});
         });
         api.addEventListener("execution_start", clearWidgetState);
@@ -607,6 +880,21 @@ app.registerExtension({
             nodeType.prototype.onAdded = function (...args) {
                 const res = originalOnAdded?.apply(this, args);
                 ensureWidget(this);
+                return res;
+            };
+
+            const originalOnDrawForeground = nodeType.prototype.onDrawForeground;
+            nodeType.prototype.onDrawForeground = function (...args) {
+                const res = originalOnDrawForeground?.apply(this, args);
+                const info = activeWidgets.get(this.id);
+                if (!info) return res;
+
+                const zoom = getCanvasZoom();
+                if (info.lastZoom !== zoom) {
+                    info.lastZoom = zoom;
+                    requestLayoutUpdate(this);
+                }
+
                 return res;
             };
         }
