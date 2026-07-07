@@ -632,14 +632,16 @@ function applyLayout(node, detail, info, options = {}) {
     grid.style.width = "100%";
     grid.style.height = formatPx(usedHeight);
     grid.style.maxHeight = formatPx(usedHeight);
-    grid.style.maxWidth = "100%";
-    grid.style.minWidth = "0px";
-    grid.style.minHeight = formatPx(usedHeight);
-    //grid.style.margin = "0 auto";
+    grid.style.maxWidth = formatPx(usedWidth);
+    grid.style.minWidth = "0";
+    grid.style.minHeight = "0";
+    grid.style.overflow = "hidden";
+    grid.style.margin = "0 auto";
     grid.style.justifyContent = "center";
     grid.style.alignContent = "center";
     grid.style.transform = "scale(1)";
 
+    if (stage) stage.style.overflow = "hidden";
     container.style.minHeight = "0px";
 
     if (info.domWidget) {
