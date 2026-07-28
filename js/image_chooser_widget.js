@@ -629,7 +629,7 @@ function applyLayout(node, detail, info, options = {}) {
     grid.style.gridAutoRows = formatPx(cellHeight);
     grid.style.columnGap = formatPx(columnGap);
     grid.style.rowGap = formatPx(rowGap);
-    grid.style.width = formatPx(usedWidth);
+    grid.style.width = "100%";
     grid.style.height = formatPx(usedHeight);
     grid.style.maxHeight = formatPx(usedHeight);
     grid.style.maxWidth = formatPx(usedWidth);
@@ -652,7 +652,10 @@ function applyLayout(node, detail, info, options = {}) {
     }
 
     if (info.domWidget) {
-        info.domWidget.computeSize = () => [layout.preferredWidth, layout.preferredHeight];
+        // Always report the current node width back unchanged so ComfyUI never
+        // uses computeSize to resize the node horizontally.  Only the height
+        // hint is ours to control.
+        info.domWidget.computeSize = (width) => [width, layout.preferredHeight];
     }
 
     if (!node._ic_userSized && options.allowSizeUpdate !== false) {
