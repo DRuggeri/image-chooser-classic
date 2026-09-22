@@ -190,6 +190,13 @@ function findChooserNode(detail) {
 
 function openChooser(event) {
     const detail = event?.detail ?? {};
+    const uniqueId = detail.unique_id ?? detail.display_id ?? "";
+    // The pending-recovery poll can replay an open we've already rendered
+    // (e.g. a focus/reconnect while the dialog is still open); ignore it so
+    // in-progress selections aren't wiped out and side effects don't repeat.
+    if (state.session && state.session.uniqueId === uniqueId) {
+        return false;
+    }
     closeChooser("replace");
     injectStyles();
 
@@ -320,6 +327,7 @@ function openChooser(event) {
     session.overlay = overlay;
 
     attachKeyHandler();
+    return true;
 }
 
 function togglePositive(session, index, tile) {

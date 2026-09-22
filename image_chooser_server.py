@@ -34,6 +34,9 @@ class MessageBroker:
     _id_map: Dict[str, str] = {}
     _cancelled = False
     _active_ids: Set[str] = set()
+    # Choosers currently waiting on user input, so a client that missed the
+    # original websocket notification (disconnected/backgrounded) can recover.
+    _pending: Dict[str, Dict[str, object]] = {}
 
     @classmethod
     def _normalise_id(cls, value: object) -> str:
@@ -51,6 +54,24 @@ class MessageBroker:
             cls._active_ids.clear()
             cls._cancelled = False
             cls._stash.clear()
+            cls._pending.clear()
+
+    @classmethod
+    def set_pending(cls, unique_id: object, event: str, context: Dict[str, object]) -> None:
+        key = str(unique_id)
+        with cls._lock:
+            cls._pending[key] = {"event": event, "context": context}
+
+    @classmethod
+    def clear_pending(cls, unique_id: object) -> None:
+        key = str(unique_id)
+        with cls._lock:
+            cls._pending.pop(key, None)
+
+    @classmethod
+    def get_pending(cls) -> list:
+        with cls._lock:
+            return list(cls._pending.values())
 
     @classmethod
     def add_message(cls, id_value, message: str) -> None:
@@ -68,6 +89,7 @@ class MessageBroker:
 
             mapped = cls._id_map.get(key, key)
             cls._messages[mapped] = message
+            cls._pending.pop(mapped, None)
             waiter = cls._waiters.get(mapped)
             if waiter:
                 waiter.set(message)
@@ -161,3 +183,8 @@ async def receive_message(request):
     post = await request.post()
     MessageBroker.add_message(post.get("id"), post.get("message", ""))
     return web.json_response({})
+
+
+@routes.get("/image_chooser_classic_pending")
+async def get_pending(request):
+    return web.json_response({"pending": MessageBroker.get_pending()})

@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { send_message, send_cancel } from "./image_chooser_messaging.js";
+import { send_message, send_cancel, registerPendingChooserRecovery } from "./image_chooser_messaging.js";
 
 const EVENT_NAME = "cg-image-chooser-classic-widget-channel";
 const THUMBNAIL_RIGHT_CLICK_SETTING_ID = "ImageChooser.thumbnailRightClick";
@@ -825,13 +825,22 @@ function handleEvent(detail) {
     const node = findNode(detail);
     if (!node) {
         console.warn("Image Chooser Classic: unable to locate node", detail);
-        return;
+        return false;
     }
-    node._ic_unique_id = detail.unique_id ?? node._ic_unique_id ?? node.id;
+    const uniqueId = detail.unique_id ?? node._ic_unique_id ?? node.id;
+    // The pending-recovery poll can replay an open we've already rendered
+    // (e.g. a focus/reconnect while the dialog is still open); ignore it so
+    // in-progress selections aren't wiped out and side effects don't repeat.
+    if (node._ic_awaiting && node._ic_unique_id === uniqueId) {
+        return false;
+    }
+    node._ic_unique_id = uniqueId;
     node._ic_display_id = detail.display_id ?? node._ic_display_id ?? node.id;
     node._ic_progress_first_pick = !!detail.progress_first_pick;
     renderChooser(node, detail);
+    node._ic_awaiting = true;
     currentActiveNode = node;
+    return true;
 }
 
 function handleKey(event) {
@@ -862,7 +871,10 @@ function clearWidgetState() {
         info.grid?.querySelectorAll(".cg-chooser-cell").forEach((cell) => cell.classList.remove("selected"));
         if (info.progressBtn) info.progressBtn.disabled = true;
         const node = app.graph?._nodes_by_id?.[nodeId];
-        if (node) node._ic_selection = new Set();
+        if (node) {
+            node._ic_selection = new Set();
+            node._ic_awaiting = false;
+        }
     });
     currentActiveNode = null;
 }
@@ -874,9 +886,11 @@ app.registerExtension({
         window.addEventListener("keydown", handleKey, true);
     },
     setup() {
+        registerPendingChooserRecovery();
         api.addEventListener(EVENT_NAME, (evt) => {
-            playAlertIfEnabled();
-            handleEvent(evt.detail ?? {});
+            if (handleEvent(evt.detail ?? {})) {
+                playAlertIfEnabled();
+            }
         });
         api.addEventListener("execution_start", clearWidgetState);
         api.addEventListener("execution_success", clearWidgetState);

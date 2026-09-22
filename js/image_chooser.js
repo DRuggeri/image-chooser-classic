@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { openChooser, closeChooser, isChooserOpen } from "./image_chooser_preview.js";
-import { send_cancel, send_onstart, skip_next_restart_message } from "./image_chooser_messaging.js";
+import { send_cancel, send_onstart, skip_next_restart_message, registerPendingChooserRecovery } from "./image_chooser_messaging.js";
 
 function ensureSettings() {
     if (!app?.ui?.settings) return;
@@ -41,13 +41,14 @@ app.registerExtension({
     },
     setup() {
         ensureSettings();
+        registerPendingChooserRecovery();
 
         api.addEventListener("cg-image-chooser-classic-open", (event) => {
-            if (app.ui.settings.getSettingValue("ImageChooser.alert", true)) {
+            const opened = openChooser(event);
+            if (opened && app.ui.settings.getSettingValue("ImageChooser.alert", true)) {
                 alertAudio.currentTime = 0;
                 alertAudio.play().catch(() => {});
             }
-            openChooser(event);
         });
 
         api.addEventListener("execution_start", () => {

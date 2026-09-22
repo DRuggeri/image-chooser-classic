@@ -84,7 +84,10 @@ class BaseChooser(PreviewImage):
         return False
 
     def notify_frontend(self, context: Dict[str, object]) -> None:
-        PromptServer.instance.send_sync("cg-image-chooser-classic-open", context)
+        PromptServer.instance.send_sync(self.event_name(), context)
+
+    def event_name(self) -> str:
+        return "cg-image-chooser-classic-open"
 
     def func(self, id, **kwargs):
         count = int(kwargs.pop("count", [1])[0])
@@ -188,11 +191,14 @@ class BaseChooser(PreviewImage):
         }
 
         if selection is None:
+            MessageBroker.set_pending(unique_id, self.event_name(), context)
             self.notify_frontend(context)
             try:
                 selection = MessageBroker.wait_for_message(unique_id, as_list=True)
             except Cancelled:
                 raise InterruptProcessingException()
+            finally:
+                MessageBroker.clear_pending(unique_id)
 
         selection = [idx for idx in selection if idx >= 0]
         MessageBroker.set_last_selection(unique_id, selection)
@@ -281,8 +287,8 @@ class PreviewAndChooseClassic(BaseChooser):
     def chooser_type(self) -> str:
         return "classic_widget"
 
-    def notify_frontend(self, context: Dict[str, object]) -> None:
-        PromptServer.instance.send_sync("cg-image-chooser-classic-widget-channel", context)
+    def event_name(self) -> str:
+        return "cg-image-chooser-classic-widget-channel"
 
 
 class PreviewAndChoose(BaseChooser):
